@@ -41,10 +41,28 @@ const result = await mysql.query('SELECT 1 AS n');
 ```ts
 const zedgi = createZedgiClient({
   url: string;           // Your Zedgi endpoint, e.g. https://dev123.zedgi.app
-  key: string;           // API key (starts with zk_...)
+  key: string;           // API key identifier (zk_...) — sent as x-zedgi-key
+  secret?: string;       // HMAC signing secret (from key creation, used locally only)
+  publicKey?: string;    // Account X25519 public key (base64url). Omit for auto-pull
+  credential?: Record<string, unknown>; // DB creds encrypted into x-zedgi-cred; credential.header is signed plaintext metadata
+  cache?: boolean;       // Cache the encrypted credential blob (default: true)
   timeout?: number;      // Request timeout in ms (default: 10000)
 });
 ```
+
+The client implements the **link logic** for zero-knowledge credentials:
+
+- When you supply `credential`, the client encrypts it **once** (or per call if `cache:false`) using your account's X25519 public key (ECIES: X25519 + HKDF + AES-256-GCM).
+- If `credential.header` is present, it is excluded from ECIES encryption and added to the signed RPC body as plaintext metadata for proxy/firewall integrations.
+- The resulting blob is sent as the `x-zedgi-cred` header on every RPC.
+- The server never sees plaintext credentials and never stores them.
+- Request signing (`x-zedgi-ts` / `x-zedgi-nonce` / `x-zedgi-sig`) is performed automatically when `secret` is provided.
+
+**Auto public key pull**
+
+If `publicKey` is omitted and `credential` is supplied, the client will fetch the current active public key from `GET /api/account/keys/current` (authenticated with your `key`). The result is cached for the lifetime of the client instance.
+
+This makes rotation seamless in many cases (see below).
 
 The returned client has:
 
@@ -139,6 +157,55 @@ try {
 ```
 
 Common codes include `ZEDGI_HOOK_NOT_FOUND`, `ZEDGI_PAID_FEATURE`, authentication errors, etc.
+
+## Credentials & the "link" (zero-knowledge model)
+
+ZedGi stores **only** target endpoint metadata for your service. The port is optional; use `host` or `host:port` in the dashboard. Your database credentials (user, password, etc.) are **never sent to ZedGi in plaintext**.
+
+- You (or the SDK) encrypt the credential object client-side with your **account public key**.
+- `credential.header` is not encrypted into `x-zedgi-cred`; it is authenticated by request signing and forwarded separately.
+- The ciphertext travels as `x-zedgi-cred`.
+- On the server it is re-encrypted (never decrypted to plaintext at the edge) for the specific proxy node.
+- Only the proxy node (transiently) decrypts to open the TCP connection to your real database.
+
+See the full guide: https://zedgi.app/docs/guide/auth and the Getting Started "Encrypting credentials" + "Key rotation" sections.
+
+```ts
+const zedgi = createZedgiClient({
+  url: 'https://YOUR_SUBDOMAIN.zedgi.app',
+  key: process.env.ZEDGI_KEY!,
+  secret: process.env.ZEDGI_SECRET!,
+  credential: {
+    host: 'db.example.com',
+    user: 'app',
+    password: process.env.DB_PASSWORD!,
+    database: 'main',
+    header: {
+      'x-firewall-token': process.env.DB_FIREWALL_TOKEN!,
+    },
+  },
+});
+```
+
+## Key rotation
+
+1. Rotate from the dashboard or `POST /api/account/keys/rotate`.
+2. A new public key becomes active. You receive an email.
+3. Update any pinned `publicKey` in your environment.
+4. Re-supply `credential` to `createZedgiClient` (or re-encrypt your `x-zedgi-cred` blob manually).
+5. The SDK (when using auto public key or on a 412 "key outdated" response) will refetch the new public key and re-encrypt.
+
+API keys (`zk_...` + signing secret) are **unaffected** by account keypair rotation — only the credential encryption key changes.
+
+## Raw HTTP (any language)
+
+Every call must include:
+
+- `x-zedgi-key`
+- `x-zedgi-ts`, `x-zedgi-nonce`, `x-zedgi-sig` (HMAC with your secret)
+- `x-zedgi-cred` (ECIES blob encrypted to your current account public key)
+
+The client does this for you when you provide `secret` + `credential` (or `publicKey`).
 
 ## TypeScript
 

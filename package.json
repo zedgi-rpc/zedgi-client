@@ -3,6 +3,16 @@
   "version": "1.0.0",
   "description": "Zedgi client SDK — call Redis, Postgres, and MySQL from any HTTP runtime.",
   "private": false,
+  "license": "MIT",
+  "author": "Olaoluwa <olaoluwa@zedgi.app>",
+  "homepage": "https://zedgi.app",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zedgi-rpc/zedgi-client.git"
+  },
+  "bugs": {
+    "url": "https://github.com/zedgi-rpc/zedgi-client/issues"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

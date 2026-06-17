@@ -1,6 +1,13 @@
 export type ZedgiClientOptions = Readonly<{
     url: string;
     key: string;
+    signingSecret?: string;
+    secret?: string;
+    publicKey?: string;
+    accountId?: string;
+    keyVersion?: number;
+    credential?: Record<string, unknown>;
+    cache?: boolean;
     timeout?: number;
 }>;
 export type ZedgiServiceType = 'redis' | 'postgres' | 'mysql';
