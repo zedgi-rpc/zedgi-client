@@ -41,13 +41,33 @@ const result = await mysql.query('SELECT 1 AS n');
 ```ts
 const zedgi = createZedgiClient({
   url: string;           // Your Zedgi endpoint, e.g. https://dev123.zedgi.app
-  key: string;           // API key identifier (zk_...) — sent as x-zedgi-key
-  secret?: string;       // HMAC signing secret (from key creation, used locally only)
-  publicKey?: string;    // Account X25519 public key (base64url). Omit for auto-pull
-  credential?: Record<string, unknown>; // DB creds encrypted into x-zedgi-cred; credential.header is signed plaintext metadata
+  key: string;           // API key identifier (zk_...) — sent as x-zedgi-key. From the dashboard.
+  credential?: Record<string, unknown>; // YOUR DB creds, encrypted into x-zedgi-cred (see shapes below)
+  secret?: string;       // OPTIONAL — HMAC signing secret. Auto-pulled + cached when omitted.
+  publicKey?: string;    // OPTIONAL — account X25519 public key (base64url). Auto-pulled when omitted.
   cache?: boolean;       // Cache the encrypted credential blob (default: true)
   timeout?: number;      // Request timeout in ms (default: 10000)
 });
+```
+
+You normally pass just **`url`, `key`, and `credential`**. The signing secret and
+account public key are fetched automatically.
+
+**Where each value comes from**
+
+- **`key`** — create it in the dashboard: open your service → **+ New key**. Shown once; it's the `x-zedgi-key` header.
+- **`credential`** — your **own database** credentials (see shapes below). Zedgi never issues these.
+- **`secret`** (signing secret) — **don't set this normally.** Each key has one; the client auto-pulls it via `GET /api/account/signing-secret` (authed by `key`) and caches it. Set it only if you want to manage signing yourself.
+
+**Credential shapes** (`host`/`port` come from the registered service, not here):
+
+```ts
+// redis — both optional; omit credential entirely if password-less
+{ password: 's3cr3t' }                 // or { password: 's3cr3t', db: 2 }
+// postgres
+{ user: 'app', password: 's3cr3t', database: 'prod', ssl: true }
+// mysql
+{ user: 'app', password: 's3cr3t', database: 'prod' }
 ```
 
 The client implements the **link logic** for zero-knowledge credentials:
@@ -56,7 +76,7 @@ The client implements the **link logic** for zero-knowledge credentials:
 - If `credential.header` is present, it is excluded from ECIES encryption and added to the signed RPC body as plaintext metadata for proxy/firewall integrations.
 - The resulting blob is sent as the `x-zedgi-cred` header on every RPC.
 - The server never sees plaintext credentials and never stores them.
-- Request signing (`x-zedgi-ts` / `x-zedgi-nonce` / `x-zedgi-sig`) is performed automatically when `secret` is provided.
+- Request signing (`x-zedgi-ts` / `x-zedgi-nonce` / `x-zedgi-sig`) is **always** applied; the signing secret is auto-pulled + cached when `secret` is not provided.
 
 **Auto public key pull**
 
@@ -173,10 +193,8 @@ See the full guide: https://zedgi.app/docs/guide/auth and the Getting Started "E
 ```ts
 const zedgi = createZedgiClient({
   url: 'https://YOUR_SUBDOMAIN.zedgi.app',
-  key: process.env.ZEDGI_KEY!,
-  secret: process.env.ZEDGI_SECRET!,
-  credential: {
-    host: 'db.example.com',
+  key: process.env.ZEDGI_KEY!,           // from the dashboard; signing is automatic
+  credential: {                          // your DB secrets — host/port are on the service
     user: 'app',
     password: process.env.DB_PASSWORD!,
     database: 'main',
@@ -202,10 +220,10 @@ API keys (`zk_...` + signing secret) are **unaffected** by account keypair rotat
 Every call must include:
 
 - `x-zedgi-key`
-- `x-zedgi-ts`, `x-zedgi-nonce`, `x-zedgi-sig` (HMAC with your secret)
+- `x-zedgi-ts`, `x-zedgi-nonce`, `x-zedgi-sig` (HMAC of `ts:nonce:sha256(body)` with the signing secret)
 - `x-zedgi-cred` (ECIES blob encrypted to your current account public key)
 
-The client does this for you when you provide `secret` + `credential` (or `publicKey`).
+The client does all of this for you from just `key` + `credential` — it auto-pulls the signing secret (`GET /api/account/signing-secret`) and the account public key (`GET /api/account/keys/current`). Doing it by hand? Fetch the signing secret from that endpoint with your `x-zedgi-key`.
 
 ## TypeScript
 

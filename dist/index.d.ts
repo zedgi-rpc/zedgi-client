@@ -4,5 +4,6 @@ export { createRedisClient } from './redis.js';
 export { createPostgresClient } from './postgres.js';
 export { createMysqlClient } from './mysql.js';
 export { callZedgi } from './client.js';
+export { encryptCredential, hmacSign, randomNonce, sha256Hex } from './crypto.js';
 export type { ZedgiClient, ZedgiClientOptions, ZedgiServiceType, RedisClient, PostgresClient, MySQLClient, QueryResult, MysqlQueryResult, TransactionStatement, } from './types.js';
-export declare const _ZEDGI_CLIENT_VERSION = "1.0.0";
+export declare const _ZEDGI_CLIENT_VERSION = "1.0.1";

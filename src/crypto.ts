@@ -59,25 +59,38 @@ const HKDF_INFO_CLIENT_GATEWAY = 'zedgi-cred-client-gateway-v1';
  * P-256 is a last-resort fallback (only valid against P-256 account keys).
  */
 type Algo = { gen: AlgorithmIdentifier | EcKeyGenParams; deriveName: 'ECDH' | 'X25519' };
-let detected: Algo | null = null;
+let detectedX25519: Algo | null = null;
+let detectedP256: Algo | null = null;
 
-const resolveAlgo = async (): Promise<Algo> => {
-  if (detected) return detected;
-  const candidates: Algo[] = [
-    { gen: { name: 'ECDH', namedCurve: 'X25519' } as EcKeyGenParams, deriveName: 'ECDH' },
-    { gen: { name: 'X25519' }, deriveName: 'X25519' },
-    { gen: { name: 'ECDH', namedCurve: 'P-256' } as EcKeyGenParams, deriveName: 'ECDH' },
-  ];
-  for (const c of candidates) {
+// X25519 spelling differs by runtime (ECDH+namedCurve vs bare X25519); P-256 is
+// a single form. The recipient key's raw length picks the curve, NOT the runtime
+// — a P-256 account key (65 bytes) must be used with P-256 even where X25519 is
+// available, otherwise importKey rejects it ("raw keys must be exactly 32-bytes").
+const X25519_CANDIDATES: Algo[] = [
+  { gen: { name: 'ECDH', namedCurve: 'X25519' } as EcKeyGenParams, deriveName: 'ECDH' },
+  { gen: { name: 'X25519' }, deriveName: 'X25519' },
+];
+const P256_ALGO: Algo = { gen: { name: 'ECDH', namedCurve: 'P-256' } as EcKeyGenParams, deriveName: 'ECDH' };
+
+/** Pick the ECDH algorithm matching the recipient key: 65 bytes → P-256, else X25519. */
+const resolveAlgo = async (keyLen: number): Promise<Algo> => {
+  if (keyLen === 65) {
+    if (detectedP256) return detectedP256;
+    await crypto.subtle.generateKey(P256_ALGO.gen, true, ['deriveBits']);
+    detectedP256 = P256_ALGO;
+    return P256_ALGO;
+  }
+  if (detectedX25519) return detectedX25519;
+  for (const c of X25519_CANDIDATES) {
     try {
       await crypto.subtle.generateKey(c.gen, true, ['deriveBits']);
-      detected = c;
+      detectedX25519 = c;
       return c;
     } catch {
       // try next
     }
   }
-  throw new Error('No supported ECDH curve (X25519 or P-256) in this runtime');
+  throw new Error('X25519 not supported in this runtime (account key is X25519)');
 };
 
 const deriveAesKey = async (sharedBits: ArrayBuffer): Promise<CryptoKey> => {
@@ -101,9 +114,10 @@ export const encryptCredential = async (
   accountIdHex: string,
   keyVersion: number
 ): Promise<string> => {
-  const algo = await resolveAlgo();
+  const recipientRaw = fromB64u(publicKeyB64u);
+  const algo = await resolveAlgo(recipientRaw.length);
 
-  const recipientPub = await crypto.subtle.importKey('raw', fromB64u(publicKeyB64u), algo.gen, false, []);
+  const recipientPub = await crypto.subtle.importKey('raw', recipientRaw, algo.gen, false, []);
   const ephemeral = (await crypto.subtle.generateKey(algo.gen, true, ['deriveBits'])) as CryptoKeyPair;
   const ephemeralPubRaw = new Uint8Array(await crypto.subtle.exportKey('raw', ephemeral.publicKey));
 

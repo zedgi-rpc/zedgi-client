@@ -14,8 +14,29 @@ type AccountKey = { publicKey: string; accountId: string; keyVersion: number };
 /** In-memory caches (per client options object) so we encrypt/pull at most once. */
 const accountKeyCache = new WeakMap<ZedgiClientOptions, Promise<AccountKey>>();
 const credBlobCache = new WeakMap<ZedgiClientOptions, Promise<string>>();
+const signingSecretCache = new WeakMap<ZedgiClientOptions, Promise<string>>();
 
 const signingSecretOf = (o: ZedgiClientOptions): string | undefined => o.signingSecret ?? o.secret;
+
+/** Resolve the HMAC signing secret — from options, or auto-pull via /api/account/signing-secret. */
+const resolveSigningSecret = async (options: ZedgiClientOptions): Promise<string> => {
+  const explicit = signingSecretOf(options);
+  if (explicit) return explicit;
+  let cached = signingSecretCache.get(options);
+  if (!cached) {
+    cached = (async () => {
+      const url = new URL('/api/account/signing-secret', options.url);
+      const res = await fetch(url.toString(), { headers: { 'x-zedgi-key': options.key } });
+      const parsed = (await res.json()) as { ok: boolean; result?: { signing_secret: string } };
+      if (!res.ok || !parsed.ok || !parsed.result) {
+        throw new Error(`Failed to fetch signing secret (${res.status})`);
+      }
+      return parsed.result.signing_secret;
+    })();
+    signingSecretCache.set(options, cached);
+  }
+  return cached;
+};
 
 const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -67,12 +88,20 @@ const resolveCredBlob = async (options: ZedgiClientOptions): Promise<string | un
   return cached;
 };
 
-export const callZedgi = async <T = unknown>(
+/** True when the SDK is auto-pulling the account key (so it can re-pull on rotation). */
+const autoKeyMode = (o: ZedgiClientOptions): boolean =>
+  !(o.publicKey && o.accountId && o.keyVersion !== undefined);
+
+/** A rotated/outdated encryption key — clearing the cache + re-pulling fixes it. */
+const isStaleKeyError = (status: number, code?: string): boolean =>
+  status === 412 || code === 'CRED_DECRYPT_FAILED';
+
+const sendOnce = async <T>(
   options: ZedgiClientOptions,
   service: ZedgiServiceType,
   method: string,
-  payload: Record<string, unknown> = {}
-): Promise<T> => {
+  payload: Record<string, unknown>
+): Promise<{ ok: true; value: T } | { ok: false; status: number; error?: { code?: string; message?: string; details?: unknown } }> => {
   const url = new URL('/rpc', options.url);
   const credentialHeader = options.credential ? splitCredentialHeader(options.credential).credentialHeader : undefined;
   const body = JSON.stringify({
@@ -89,15 +118,14 @@ export const callZedgi = async <T = unknown>(
   };
 
   // Request signing (timestamp + nonce + HMAC-SHA256 over "ts:nonce:sha256(body)").
-  const secret = signingSecretOf(options);
-  if (secret) {
-    const ts = String(Date.now());
-    const nonce = randomNonce();
-    const sig = await hmacSign(`${ts}:${nonce}:${await sha256Hex(body)}`, secret);
-    headers['x-zedgi-ts'] = ts;
-    headers['x-zedgi-nonce'] = nonce;
-    headers['x-zedgi-sig'] = sig;
-  }
+  // The signing secret is auto-pulled (and cached) when not supplied in options.
+  const secret = await resolveSigningSecret(options);
+  const ts = String(Date.now());
+  const nonce = randomNonce();
+  const sig = await hmacSign(`${ts}:${nonce}:${await sha256Hex(body)}`, secret);
+  headers['x-zedgi-ts'] = ts;
+  headers['x-zedgi-nonce'] = nonce;
+  headers['x-zedgi-sig'] = sig;
 
   // ECIES-encrypted credentials (never sent in plaintext).
   const credBlob = await resolveCredBlob(options);
@@ -114,19 +142,34 @@ export const callZedgi = async <T = unknown>(
   }
 
   const parsed = await response.json() as RpcResponse<T>;
+  if (parsed.ok) return { ok: true, value: parsed.result };
+  return { ok: false, status: response.status, error: parsed.error };
+};
 
-  if (!parsed.ok) {
-    // Key rotated: drop cached key/blob so the next call re-pulls + re-encrypts.
-    if (response.status === 412) {
+export const callZedgi = async <T = unknown>(
+  options: ZedgiClientOptions,
+  service: ZedgiServiceType,
+  method: string,
+  payload: Record<string, unknown> = {}
+): Promise<T> => {
+  // Two attempts at most: on a rotated/outdated key (in auto mode) we drop the
+  // cached public key + ciphertext, re-pull the current key, and retry once.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await sendOnce<T>(options, service, method, payload);
+    if (res.ok) return res.value;
+
+    if (attempt === 0 && autoKeyMode(options) && isStaleKeyError(res.status, res.error?.code)) {
       accountKeyCache.delete(options);
       credBlobCache.delete(options);
+      continue;
     }
-    const err = new Error(parsed.error?.message ?? `Zedgi call failed (${response.status})`) as Error & { code?: string; statusCode?: number; details?: unknown };
-    err.code = parsed.error?.code;
-    err.statusCode = response.status;
-    err.details = parsed.error?.details;
+
+    const err = new Error(res.error?.message ?? `Zedgi call failed (${res.status})`) as Error & { code?: string; statusCode?: number; details?: unknown };
+    err.code = res.error?.code;
+    err.statusCode = res.status;
+    err.details = res.error?.details;
     throw err;
   }
-
-  return parsed.result;
+  // Unreachable: the loop either returns a value or throws.
+  throw new Error('Zedgi call failed');
 };

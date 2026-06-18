@@ -1,6 +1,6 @@
 {
   "name": "@zedgi/zedgi-client",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Zedgi client SDK — call Redis, Postgres, and MySQL from any HTTP runtime.",
   "private": false,
   "license": "MIT",
@@ -46,6 +46,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && node ../../scripts/fix-dist-esm-imports.mjs dist",
     "type-check": "tsc --noEmit -p tsconfig.json",
+    "bump": "node scripts/bump-version.mjs",
+    "release": "npm run bump && npm install && npm run type-check && npm run build && npm publish --access public",
     "prepublishOnly": "npm run build"
   }
 }

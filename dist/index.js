@@ -12,4 +12,7 @@ export { createRedisClient } from './redis.js';
 export { createPostgresClient } from './postgres.js';
 export { createMysqlClient } from './mysql.js';
 export { callZedgi } from './client.js';
-export const _ZEDGI_CLIENT_VERSION = '1.0.0';
+// Low-level crypto helpers — exported so advanced users (and our own diagnostics)
+// can hand-build a signed/encrypted `/rpc` request without the high-level client.
+export { encryptCredential, hmacSign, randomNonce, sha256Hex } from './crypto.js';
+export const _ZEDGI_CLIENT_VERSION = '1.0.1';
