@@ -116,6 +116,33 @@ await redis.multi([...]);
 
 Unknown method names are automatically forwarded as custom hooks (see below).
 
+### BullMQ queues
+
+BullMQ rides on your existing **Redis** service — there's no separate service to register.
+Use the same `key`/`credential` as Redis; the client sends each op as `bull:<method>` and the
+backend runs the real BullMQ operation (default `bull` key prefix, so jobs interoperate with
+your own workers).
+
+```ts
+const queue = zedgi.queue('emails');
+
+// Produce
+await queue.add('send', { to: 'dev@example.com' }, { attempts: 3 });
+
+// Inspect
+await queue.getJobCounts();          // { waiting, active, completed, failed, ... }
+await queue.getJob('42');
+await queue.getSnapshot();           // counts across all queues — for dashboards
+
+// Manage
+await queue.pause();
+await queue.retryJob('42');
+await queue.clean(0, 1000, 'completed');
+```
+
+> Workers/consumers still run in your own runtime against the same Redis — the client covers
+> producing jobs and inspecting/managing queue state, not running the processors.
+
 ### Postgres & MySQL
 
 ```ts

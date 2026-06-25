@@ -100,9 +100,66 @@ export type MySQLClient = Readonly<{
     transaction: (statements: TransactionStatement[]) => Promise<MysqlQueryResult[]>;
     hook: <T = unknown>(name: string, payload?: HookPayload) => Promise<T>;
 }> & CustomHookInvoker;
+/** A serialized BullMQ job as returned by the backend. */
+export type QueueJob = Readonly<{
+    id?: string;
+    name: string;
+    queueName: string;
+    data: unknown;
+    opts: Record<string, unknown>;
+    attemptsMade: number;
+    failedReason?: string;
+    returnvalue?: unknown;
+    timestamp?: number;
+    processedOn?: number | null;
+    finishedOn?: number | null;
+    state?: string;
+}>;
+/**
+ * BullMQ queue client. Rides on your existing Redis service — ops are sent as
+ * `bull:<method>` with the queue name in the payload. Obtain one with
+ * `zedgi.queue('emails')`.
+ */
+export type QueueClient = Readonly<{
+    add: (jobName: string, data?: unknown, opts?: Record<string, unknown>) => Promise<QueueJob | null>;
+    getJob: (id: string) => Promise<QueueJob | null>;
+    getJobs: (states?: string[], start?: number, end?: number, asc?: boolean) => Promise<(QueueJob | null)[]>;
+    getJobCounts: (...types: string[]) => Promise<Record<string, number>>;
+    count: () => Promise<number>;
+    pause: () => Promise<boolean>;
+    resume: () => Promise<boolean>;
+    drain: (delayed?: boolean) => Promise<boolean>;
+    clean: (grace: number, limit: number, type?: string) => Promise<string[]>;
+    removeJob: (id: string) => Promise<boolean>;
+    retryJob: (id: string) => Promise<{
+        ok: boolean;
+        status: string;
+    }>;
+    promoteJob: (id: string) => Promise<{
+        ok: boolean;
+        status: string;
+    }>;
+    obliterate: (opts?: Record<string, unknown>) => Promise<boolean>;
+    closeQueue: () => Promise<boolean>;
+    getSnapshot: () => Promise<{
+        status: string;
+        startedAt: string;
+        queues: Array<{
+            name: string;
+            counts: Record<string, number>;
+        }>;
+    }>;
+    getEvents: () => Promise<Array<{
+        event: string;
+        payload: unknown;
+        at: number;
+    }>>;
+    getRecentJobsForQueue: (limit?: number) => Promise<(QueueJob | null)[]>;
+}>;
 export type ZedgiClient = Readonly<{
     redis: () => RedisClient;
     postgres: () => PostgresClient;
     mysql: () => MySQLClient;
+    queue: (name: string) => QueueClient;
     call: <T = unknown>(service: ZedgiServiceType, method: string, payload?: Record<string, unknown>) => Promise<T>;
 }>;

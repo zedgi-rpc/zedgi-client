@@ -2,6 +2,7 @@ import { callZedgi } from './client.js';
 import { createMysqlClient } from './mysql.js';
 import { createPostgresClient } from './postgres.js';
 import { createRedisClient } from './redis.js';
+import { createQueueClient } from './queue.js';
 import type { ZedgiClient, ZedgiClientOptions, ZedgiServiceType } from './types.js';
 
 export const createZedgiClient = (options: ZedgiClientOptions): ZedgiClient =>
@@ -9,6 +10,7 @@ export const createZedgiClient = (options: ZedgiClientOptions): ZedgiClient =>
     redis: () => createRedisClient(options),
     postgres: () => createPostgresClient(options),
     mysql: () => createMysqlClient(options),
+    queue: (name: string) => createQueueClient(options, name),
     call: <T = unknown>(service: ZedgiServiceType, method: string, payload?: Record<string, unknown>) =>
       callZedgi<T>(options, service, method, payload ?? {}),
   });
@@ -16,6 +18,7 @@ export const createZedgiClient = (options: ZedgiClientOptions): ZedgiClient =>
 export { createRedisClient } from './redis.js';
 export { createPostgresClient } from './postgres.js';
 export { createMysqlClient } from './mysql.js';
+export { createQueueClient } from './queue.js';
 export { callZedgi } from './client.js';
 
 // Low-level crypto helpers — exported so advanced users (and our own diagnostics)
@@ -29,6 +32,8 @@ export type {
   RedisClient,
   PostgresClient,
   MySQLClient,
+  QueueClient,
+  QueueJob,
   QueryResult,
   MysqlQueryResult,
   TransactionStatement,
