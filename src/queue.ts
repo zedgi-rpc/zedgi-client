@@ -1,5 +1,5 @@
 import { callZedgi } from './client.js';
-import type { ZedgiClientOptions, QueueClient } from './types.js';
+import type { ZedgiClientOptions, QueueClient, ZedgiCredentialSelector } from './types.js';
 
 /**
  * BullMQ queue client. BullMQ rides on your existing Redis service — there is no
@@ -12,9 +12,9 @@ import type { ZedgiClientOptions, QueueClient } from './types.js';
  *   await queue.add('send', { to: 'dev@example.com' }, { attempts: 3 });
  *   await queue.getJobCounts();
  */
-export const createQueueClient = (options: ZedgiClientOptions, name: string): QueueClient => {
+export const createQueueClient = (options: ZedgiClientOptions, name: string, credential?: ZedgiCredentialSelector): QueueClient => {
   const call = <T>(op: string, args: unknown[] = []): Promise<T> =>
-    callZedgi<T>(options, 'redis', `bull:${op}`, { target: name, args });
+    callZedgi<T>(options, 'redis', `bull:${op}`, { target: name, args }, { credential });
 
   const client: QueueClient = {
     add: (jobName, data, opts) => call('add', [jobName, data, opts]),
@@ -31,9 +31,12 @@ export const createQueueClient = (options: ZedgiClientOptions, name: string): Qu
     promoteJob: (id) => call('promoteJob', [id]),
     obliterate: (opts) => call('obliterate', [opts]),
     closeQueue: () => call('closeQueue'),
+    // Monitor ops are routed to the backend's queue-monitor service, which reads
+    // the queue name from args[0] (not payload.target). getSnapshot covers all
+    // queues, so it takes no name.
     getSnapshot: () => call('getSnapshot'),
-    getEvents: () => call('getEvents'),
-    getRecentJobsForQueue: (limit) => call('getRecentJobsForQueue', [limit]),
+    getEvents: () => call('getEvents', [name]),
+    getRecentJobsForQueue: (limit) => call('getRecentJobsForQueue', [name, limit]),
   };
 
   return Object.freeze(client);

@@ -1,5 +1,5 @@
 import { callZedgi } from './client.js';
-import type { ZedgiClientOptions, RedisClient, HookPayload } from './types.js';
+import type { ZedgiClientOptions, RedisClient, HookPayload, ZedgiCredentialSelector } from './types.js';
 
 /**
  * Wraps the typed built-in methods in a Proxy so any unknown method name is
@@ -7,9 +7,9 @@ import type { ZedgiClientOptions, RedisClient, HookPayload } from './types.js';
  * → POST /rpc { method: 'topUsers', payload: { args: ['leaderboard', 10] } }.
  * For Lua hooks needing KEYS, use the explicit `redis.hook(name, { keys, args })`.
  */
-export const createRedisClient = (options: ZedgiClientOptions): RedisClient => {
+export const createRedisClient = (options: ZedgiClientOptions, credential?: ZedgiCredentialSelector): RedisClient => {
   const call = <T>(method: string, payload: Record<string, unknown> = {}): Promise<T> =>
-    callZedgi<T>(options, 'redis', method, payload);
+    callZedgi<T>(options, 'redis', method, payload, { credential });
 
   const builtins: Record<string, (...args: never[]) => Promise<unknown>> = {
     ping: () => call<string>('ping'),

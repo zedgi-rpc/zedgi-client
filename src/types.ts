@@ -1,3 +1,9 @@
+export type ZedgiCredential = Record<string, unknown>;
+
+export type ZedgiCredentialProfiles = Partial<Record<ZedgiServiceType, Record<string, ZedgiCredential>>>;
+
+export type ZedgiCredentialSelector = string | ZedgiCredential;
+
 export type ZedgiClientOptions = Readonly<{
   url: string;
   key: string;                 // x-zedgi-key (zk_... identifier)
@@ -6,15 +12,18 @@ export type ZedgiClientOptions = Readonly<{
   publicKey?: string;          // account X25519 public key (base64url) for ECIES credential encryption. Omit to auto-pull via /api/account/keys/current
   accountId?: string;          // 32-hex account id for the cred blob header (auto-pulled with publicKey when omitted)
   keyVersion?: number;         // keypair rotation counter (auto-pulled with publicKey when omitted)
-  credential?: Record<string, unknown>; // DB/service credentials to encrypt client-side; credential.header is sent signed but unencrypted
+  credential?: ZedgiCredential; // legacy default DB/service credential; credential.header is sent signed but unencrypted
+  credentials?: ZedgiCredentialProfiles; // named credentials per service; "default" is used when no profile is selected
   cache?: boolean;             // cache encrypted credential blob in memory (default true)
   timeout?: number;
+  testNodeUuid?: string;       // admin diagnostics only: force /rpc through a specific proxy node
 }>;
 
 export type ZedgiServiceType = 'redis' | 'postgres' | 'mysql';
 
 export type ZedgiCallOptions = Readonly<{
   requestId?: string;
+  credential?: ZedgiCredentialSelector;
 }>;
 
 export type QueryResult<T = Record<string, unknown>> = Readonly<{
@@ -141,9 +150,9 @@ export type QueueClient = Readonly<{
 }>;
 
 export type ZedgiClient = Readonly<{
-  redis: () => RedisClient;
-  postgres: () => PostgresClient;
-  mysql: () => MySQLClient;
-  queue: (name: string) => QueueClient;
-  call: <T = unknown>(service: ZedgiServiceType, method: string, payload?: Record<string, unknown>) => Promise<T>;
+  redis: (credential?: ZedgiCredentialSelector) => RedisClient;
+  postgres: (credential?: ZedgiCredentialSelector) => PostgresClient;
+  mysql: (credential?: ZedgiCredentialSelector) => MySQLClient;
+  queue: (name: string, credential?: ZedgiCredentialSelector) => QueueClient;
+  call: <T = unknown>(service: ZedgiServiceType, method: string, payload?: Record<string, unknown>, options?: ZedgiCallOptions) => Promise<T>;
 }>;

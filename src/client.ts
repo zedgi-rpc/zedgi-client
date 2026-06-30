@@ -1,4 +1,4 @@
-import type { ZedgiClientOptions, ZedgiServiceType } from './types.js';
+import type { ZedgiClientOptions, ZedgiCredential, ZedgiCredentialSelector, ZedgiServiceType } from './types.js';
 import { encryptCredential, hmacSign, randomNonce, sha256Hex } from './crypto.js';
 
 type RpcResponse<T> = { ok: true; result: T; requestId: string | null; error: null } | { ok: false; error: { code: string; message: string; details?: unknown }; result?: never };
@@ -13,7 +13,7 @@ type AccountKey = { publicKey: string; accountId: string; keyVersion: number };
 
 /** In-memory caches (per client options object) so we encrypt/pull at most once. */
 const accountKeyCache = new WeakMap<ZedgiClientOptions, Promise<AccountKey>>();
-const credBlobCache = new WeakMap<ZedgiClientOptions, Promise<string>>();
+const credBlobCache = new WeakMap<ZedgiCredential, Promise<string>>();
 const signingSecretCache = new WeakMap<ZedgiClientOptions, Promise<string>>();
 
 const signingSecretOf = (o: ZedgiClientOptions): string | undefined => o.signingSecret ?? o.secret;
@@ -50,6 +50,20 @@ export const splitCredentialHeader = (
   return { encryptedCredential, credentialHeader: header };
 };
 
+export const resolveCredential = (
+  options: ZedgiClientOptions,
+  service: ZedgiServiceType,
+  selector?: ZedgiCredentialSelector
+): ZedgiCredential | undefined => {
+  if (isPlainRecord(selector)) return selector;
+  if (typeof selector === 'string') {
+    const credential = options.credentials?.[service]?.[selector];
+    if (!credential) throw new Error(`Zedgi credential profile "${selector}" was not found for ${service}`);
+    return credential;
+  }
+  return options.credentials?.[service]?.default ?? options.credential;
+};
+
 /** Resolve the account public key — from options, or auto-pull via /api/account/keys/current. */
 const resolveAccountKey = async (options: ZedgiClientOptions): Promise<AccountKey> => {
   if (options.publicKey && options.accountId && options.keyVersion !== undefined) {
@@ -72,18 +86,18 @@ const resolveAccountKey = async (options: ZedgiClientOptions): Promise<AccountKe
 };
 
 /** Build the ECIES-encrypted credential blob, caching it unless cache:false. */
-const resolveCredBlob = async (options: ZedgiClientOptions): Promise<string | undefined> => {
-  if (!options.credential) return undefined;
+const resolveCredBlob = async (options: ZedgiClientOptions, credential?: ZedgiCredential): Promise<string | undefined> => {
+  if (!credential) return undefined;
   const build = async (): Promise<string> => {
     const ak = await resolveAccountKey(options);
-    const { encryptedCredential } = splitCredentialHeader(options.credential!);
+    const { encryptedCredential } = splitCredentialHeader(credential);
     return encryptCredential(encryptedCredential, ak.publicKey, ak.accountId, ak.keyVersion);
   };
   if (options.cache === false) return build();
-  let cached = credBlobCache.get(options);
+  let cached = credBlobCache.get(credential);
   if (!cached) {
     cached = build();
-    credBlobCache.set(options, cached);
+    credBlobCache.set(credential, cached);
   }
   return cached;
 };
@@ -100,10 +114,11 @@ const sendOnce = async <T>(
   options: ZedgiClientOptions,
   service: ZedgiServiceType,
   method: string,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  credential?: ZedgiCredential
 ): Promise<{ ok: true; value: T } | { ok: false; status: number; error?: { code?: string; message?: string; details?: unknown } }> => {
   const url = new URL('/rpc', options.url);
-  const credentialHeader = options.credential ? splitCredentialHeader(options.credential).credentialHeader : undefined;
+  const credentialHeader = credential ? splitCredentialHeader(credential).credentialHeader : undefined;
   const body = JSON.stringify({
     requestId: randomId(),
     service,
@@ -128,8 +143,9 @@ const sendOnce = async <T>(
   headers['x-zedgi-sig'] = sig;
 
   // ECIES-encrypted credentials (never sent in plaintext).
-  const credBlob = await resolveCredBlob(options);
+  const credBlob = await resolveCredBlob(options, credential);
   if (credBlob) headers['x-zedgi-cred'] = credBlob;
+  if (options.testNodeUuid) headers['x-zedgi-node-uuid'] = options.testNodeUuid;
 
   const controller = new AbortController();
   const timerId = setTimeout(() => controller.abort(), options.timeout ?? 10_000);
@@ -150,17 +166,19 @@ export const callZedgi = async <T = unknown>(
   options: ZedgiClientOptions,
   service: ZedgiServiceType,
   method: string,
-  payload: Record<string, unknown> = {}
+  payload: Record<string, unknown> = {},
+  callOptions: { credential?: ZedgiCredentialSelector } = {}
 ): Promise<T> => {
+  const credential = resolveCredential(options, service, callOptions.credential);
   // Two attempts at most: on a rotated/outdated key (in auto mode) we drop the
   // cached public key + ciphertext, re-pull the current key, and retry once.
   for (let attempt = 0; attempt < 2; attempt++) {
-    const res = await sendOnce<T>(options, service, method, payload);
+    const res = await sendOnce<T>(options, service, method, payload, credential);
     if (res.ok) return res.value;
 
     if (attempt === 0 && autoKeyMode(options) && isStaleKeyError(res.status, res.error?.code)) {
       accountKeyCache.delete(options);
-      credBlobCache.delete(options);
+      if (credential) credBlobCache.delete(credential);
       continue;
     }
 
