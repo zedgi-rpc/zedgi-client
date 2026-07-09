@@ -5,37 +5,81 @@ type RpcResponse<T> = { ok: true; result: T; requestId: string | null; error: nu
 
 /** Web-standard UUID (works in Node 18+, Cloudflare Workers, Deno, browsers). */
 const randomId = (): string =>
-  (globalThis.crypto?.randomUUID?.() ??
-    `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`);
+(globalThis.crypto?.randomUUID?.() ??
+  `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`);
 
 /** Account public key material needed to encrypt credentials client-side. */
 type AccountKey = { publicKey: string; accountId: string; keyVersion: number };
 
+type BootstrapDetails = {
+  accountKey: AccountKey;
+  signingSecret: string;
+};
+
 /** In-memory caches (per client options object) so we encrypt/pull at most once. */
-const accountKeyCache = new WeakMap<ZedgiClientOptions, Promise<AccountKey>>();
+const bootstrapCache = new WeakMap<ZedgiClientOptions, Promise<BootstrapDetails>>();
 const credBlobCache = new WeakMap<ZedgiCredential, Promise<string>>();
-const signingSecretCache = new WeakMap<ZedgiClientOptions, Promise<string>>();
 
 const signingSecretOf = (o: ZedgiClientOptions): string | undefined => o.signingSecret ?? o.secret;
 
-/** Resolve the HMAC signing secret — from options, or auto-pull via /api/account/signing-secret. */
-const resolveSigningSecret = async (options: ZedgiClientOptions): Promise<string> => {
-  const explicit = signingSecretOf(options);
-  if (explicit) return explicit;
-  let cached = signingSecretCache.get(options);
+const resolveBootstrap = (options: ZedgiClientOptions): Promise<BootstrapDetails> => {
+  let cached = bootstrapCache.get(options);
   if (!cached) {
     cached = (async () => {
-      const url = new URL('/api/account/signing-secret', options.url);
-      const res = await fetch(url.toString(), { headers: { 'x-zedgi-key': options.key } });
-      const parsed = (await res.json()) as { ok: boolean; result?: { signing_secret: string } };
-      if (!res.ok || !parsed.ok || !parsed.result) {
-        throw new Error(`Failed to fetch signing secret (${res.status})`);
+      let keyData: AccountKey;
+      let secretData: string;
+
+      const explicitSecret = signingSecretOf(options);
+      const hasExplicitKey = options.publicKey && options.accountId && options.keyVersion !== undefined;
+
+      if (explicitSecret && hasExplicitKey) {
+        keyData = {
+          publicKey: options.publicKey!,
+          accountId: options.accountId!,
+          keyVersion: options.keyVersion!,
+        };
+        secretData = explicitSecret;
+      } else {
+        const url = new URL('/api/account/bootstrap', options.url);
+        const res = await fetch(url.toString(), { headers: { 'x-zedgi-key': options.key } });
+        const parsed = (await res.json()) as {
+          ok: boolean;
+          result?: {
+            key: { id: string; key_version: number; public_key: string; created_at: number };
+            signing_secret: string;
+          };
+        };
+        if (!res.ok || !parsed.ok || !parsed.result) {
+          throw new Error(`Failed to bootstrap client config (${res.status})`);
+        }
+        keyData = {
+          publicKey: parsed.result.key.public_key,
+          accountId: parsed.result.key.id,
+          keyVersion: parsed.result.key.key_version,
+        };
+        secretData = parsed.result.signing_secret;
       }
-      return parsed.result.signing_secret;
+
+      if (explicitSecret) secretData = explicitSecret;
+      if (hasExplicitKey) {
+        keyData = {
+          publicKey: options.publicKey!,
+          accountId: options.accountId!,
+          keyVersion: options.keyVersion!,
+        };
+      }
+
+      return { accountKey: keyData, signingSecret: secretData };
     })();
-    signingSecretCache.set(options, cached);
+    bootstrapCache.set(options, cached);
   }
   return cached;
+};
+
+/** Resolve the HMAC signing secret — from options, or auto-pull via /api/account/bootstrap. */
+const resolveSigningSecret = async (options: ZedgiClientOptions): Promise<string> => {
+  const details = await resolveBootstrap(options);
+  return details.signingSecret;
 };
 
 const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
@@ -64,25 +108,10 @@ export const resolveCredential = (
   return options.credentials?.[service]?.default ?? options.credential;
 };
 
-/** Resolve the account public key — from options, or auto-pull via /api/account/keys/current. */
+/** Resolve the account public key — from options, or auto-pull via /api/account/bootstrap. */
 const resolveAccountKey = async (options: ZedgiClientOptions): Promise<AccountKey> => {
-  if (options.publicKey && options.accountId && options.keyVersion !== undefined) {
-    return { publicKey: options.publicKey, accountId: options.accountId, keyVersion: options.keyVersion };
-  }
-  let cached = accountKeyCache.get(options);
-  if (!cached) {
-    cached = (async () => {
-      const url = new URL('/api/account/keys/current', options.url);
-      const res = await fetch(url.toString(), { headers: { 'x-zedgi-key': options.key } });
-      const parsed = (await res.json()) as { ok: boolean; result?: { id: string; key_version: number; public_key: string } };
-      if (!res.ok || !parsed.ok || !parsed.result) {
-        throw new Error(`Failed to fetch account public key (${res.status})`);
-      }
-      return { publicKey: parsed.result.public_key, accountId: parsed.result.id, keyVersion: parsed.result.key_version };
-    })();
-    accountKeyCache.set(options, cached);
-  }
-  return cached;
+  const details = await resolveBootstrap(options);
+  return details.accountKey;
 };
 
 /** Build the ECIES-encrypted credential blob, caching it unless cache:false. */
@@ -174,19 +203,21 @@ export const callZedgi = async <T = unknown>(
   // cached public key + ciphertext, re-pull the current key, and retry once.
   for (let attempt = 0; attempt < 2; attempt++) {
     const res = await sendOnce<T>(options, service, method, payload, credential);
-    if (res.ok) return res.value;
+    if (res.ok === false) {
+      if (attempt === 0 && autoKeyMode(options) && isStaleKeyError(res.status, res.error?.code)) {
+        bootstrapCache.delete(options);
+        if (credential) credBlobCache.delete(credential);
+        continue;
+      }
 
-    if (attempt === 0 && autoKeyMode(options) && isStaleKeyError(res.status, res.error?.code)) {
-      accountKeyCache.delete(options);
-      if (credential) credBlobCache.delete(credential);
-      continue;
+      const err = new Error(res.error?.message ?? `Zedgi call failed (${res.status})`) as Error & { code?: string; statusCode?: number; details?: unknown };
+      err.code = res.error?.code;
+      err.statusCode = res.status;
+      err.details = res.error?.details;
+      throw err;
     }
 
-    const err = new Error(res.error?.message ?? `Zedgi call failed (${res.status})`) as Error & { code?: string; statusCode?: number; details?: unknown };
-    err.code = res.error?.code;
-    err.statusCode = res.status;
-    err.details = res.error?.details;
-    throw err;
+    return res.value;
   }
   // Unreachable: the loop either returns a value or throws.
   throw new Error('Zedgi call failed');
