@@ -1,6 +1,6 @@
 # @zedgi/zedgi-client
 
-Call your own **Redis, Postgres, and MySQL** from any JavaScript runtime over HTTPS — no TCP sockets required.
+Call your own **Redis, Postgres, MySQL, and Memcached beta** from any JavaScript runtime over HTTPS — no TCP sockets required.
 
 Works in Node.js, Cloudflare Workers, Deno, Bun, browsers (with a proxy), and any other environment that supports `fetch`.
 

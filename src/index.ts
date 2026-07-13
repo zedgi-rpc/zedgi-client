@@ -2,6 +2,7 @@ import { callZedgi } from './client.js';
 import { createMysqlClient } from './mysql.js';
 import { createPostgresClient } from './postgres.js';
 import { createRedisClient } from './redis.js';
+import { createMemcachedClient } from './memcached.js';
 import { createQueueClient } from './queue.js';
 import type { ZedgiCallOptions, ZedgiClient, ZedgiClientOptions, ZedgiCredentialSelector, ZedgiServiceType } from './types.js';
 
@@ -10,6 +11,7 @@ export const createZedgiClient = (options: ZedgiClientOptions): ZedgiClient =>
     redis: (credential?: ZedgiCredentialSelector) => createRedisClient(options, credential),
     postgres: (credential?: ZedgiCredentialSelector) => createPostgresClient(options, credential),
     mysql: (credential?: ZedgiCredentialSelector) => createMysqlClient(options, credential),
+    memcached: (credential?: ZedgiCredentialSelector) => createMemcachedClient(options, credential),
     queue: (name: string, credential?: ZedgiCredentialSelector) => createQueueClient(options, name, credential),
     call: <T = unknown>(
       service: ZedgiServiceType,
@@ -22,6 +24,7 @@ export const createZedgiClient = (options: ZedgiClientOptions): ZedgiClient =>
 export { createRedisClient } from './redis.js';
 export { createPostgresClient } from './postgres.js';
 export { createMysqlClient } from './mysql.js';
+export { createMemcachedClient } from './memcached.js';
 export { createQueueClient } from './queue.js';
 export { callZedgi } from './client.js';
 
@@ -40,6 +43,7 @@ export type {
   RedisClient,
   PostgresClient,
   MySQLClient,
+  MemcachedClient,
   QueueClient,
   QueueJob,
   QueryResult,

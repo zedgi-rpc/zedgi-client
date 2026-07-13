@@ -19,7 +19,17 @@ export type ZedgiClientOptions = Readonly<{
   testNodeUuid?: string;       // admin diagnostics only: force /rpc through a specific proxy node
 }>;
 
-export type ZedgiServiceType = 'redis' | 'postgres' | 'mysql';
+export type ZedgiServiceType =
+  | 'redis'
+  | 'postgres'
+  | 'mysql'
+  | 'memcached'
+  | 'mongodb'
+  | 'rabbitmq'
+  | 'nats'
+  | 'mqtt'
+  | 'ldap'
+  | 'sftp';
 
 export type ZedgiCallOptions = Readonly<{
   requestId?: string;
@@ -108,6 +118,28 @@ export type MySQLClient = Readonly<{
   hook: <T = unknown>(name: string, payload?: HookPayload) => Promise<T>;
 }> & CustomHookInvoker;
 
+export type MemcachedClient = Readonly<{
+  ping: () => Promise<{ pong: boolean; version?: string }>;
+  version: () => Promise<string>;
+  get: (key: string) => Promise<string | null>;
+  getMany: (keys: string[]) => Promise<Record<string, string | null>>;
+  gets: (key: string) => Promise<{ value: string; flags: number; cas?: string } | null>;
+  gat: (ttl: number, key: string) => Promise<string | null>;
+  gats: (ttl: number, key: string) => Promise<{ value: string; flags: number; cas?: string } | null>;
+  set: (key: string, value: unknown, ttl?: number, flags?: number) => Promise<boolean>;
+  add: (key: string, value: unknown, ttl?: number, flags?: number) => Promise<boolean>;
+  replace: (key: string, value: unknown, ttl?: number, flags?: number) => Promise<boolean>;
+  append: (key: string, value: unknown) => Promise<boolean>;
+  prepend: (key: string, value: unknown) => Promise<boolean>;
+  cas: (key: string, value: unknown, cas: string, ttl?: number, flags?: number) => Promise<boolean>;
+  delete: (key: string) => Promise<boolean>;
+  del: (key: string) => Promise<boolean>;
+  incr: (key: string, delta?: number) => Promise<number | null>;
+  decr: (key: string, delta?: number) => Promise<number | null>;
+  touch: (key: string, ttl: number) => Promise<boolean>;
+  stats: (arg?: string) => Promise<Record<string, string>>;
+}>;
+
 /** A serialized BullMQ job as returned by the backend. */
 export type QueueJob = Readonly<{
   id?: string;
@@ -153,6 +185,7 @@ export type ZedgiClient = Readonly<{
   redis: (credential?: ZedgiCredentialSelector) => RedisClient;
   postgres: (credential?: ZedgiCredentialSelector) => PostgresClient;
   mysql: (credential?: ZedgiCredentialSelector) => MySQLClient;
+  memcached: (credential?: ZedgiCredentialSelector) => MemcachedClient;
   queue: (name: string, credential?: ZedgiCredentialSelector) => QueueClient;
   call: <T = unknown>(service: ZedgiServiceType, method: string, payload?: Record<string, unknown>, options?: ZedgiCallOptions) => Promise<T>;
 }>;
