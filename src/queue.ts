@@ -15,9 +15,14 @@ import type { ZedgiClientOptions, QueueClient, ZedgiCredentialSelector } from '.
 export const createQueueClient = (options: ZedgiClientOptions, name: string, credential?: ZedgiCredentialSelector): QueueClient => {
   const call = <T>(op: string, args: unknown[] = []): Promise<T> =>
     callZedgi<T>(options, 'redis', `bull:${op}`, { target: name, args }, { credential });
+  const callPayload = <T>(op: string, payload: Record<string, unknown>): Promise<T> =>
+    callZedgi<T>(options, 'redis', `bull:${op}`, { target: name, ...payload }, { credential });
 
   const client: QueueClient = {
     add: (jobName, data, opts) => call('add', [jobName, data, opts]),
+    dequeue: (visibilityTimeoutMs) => callPayload('dequeue', { visibilityTimeoutMs }),
+    ack: (id, returnValue) => call('ack', [id, returnValue]),
+    fail: (id, reason) => call('fail', [id, reason]),
     getJob: (id) => call('getJob', [id]),
     getJobs: (states, start, end, asc) => call('getJobs', [states, start, end, asc]),
     getJobCounts: (...types) => call('getJobCounts', types),

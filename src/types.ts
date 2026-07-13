@@ -163,6 +163,9 @@ export type QueueJob = Readonly<{
  */
 export type QueueClient = Readonly<{
   add: (jobName: string, data?: unknown, opts?: Record<string, unknown>) => Promise<QueueJob | null>;
+  dequeue: (visibilityTimeoutMs?: number) => Promise<QueueJob | null>;
+  ack: (id: string, returnValue?: unknown) => Promise<boolean>;
+  fail: (id: string, reason?: string) => Promise<boolean>;
   getJob: (id: string) => Promise<QueueJob | null>;
   getJobs: (states?: string[], start?: number, end?: number, asc?: boolean) => Promise<(QueueJob | null)[]>;
   getJobCounts: (...types: string[]) => Promise<Record<string, number>>;
