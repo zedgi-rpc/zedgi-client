@@ -14,7 +14,7 @@ export type ZedgiClientOptions = Readonly<{
   keyVersion?: number;         // keypair rotation counter (auto-pulled with publicKey when omitted)
   credential?: ZedgiCredential; // legacy default DB/service credential; credential.header is sent signed but unencrypted
   credentials?: ZedgiCredentialProfiles; // named credentials per service; "default" is used when no profile is selected
-  cache?: boolean;             // cache encrypted credential blob in memory (default true)
+  cache?: boolean;             // cache encrypted credential blob in memory for 55 minutes (default true)
   timeout?: number;
   testNodeUuid?: string;       // admin diagnostics only: force /rpc through a specific proxy node
 }>;

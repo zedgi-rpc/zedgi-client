@@ -126,11 +126,13 @@ firewall must see.
 
 The client implements the **link logic** for zero-knowledge credentials:
 
-- When you supply `credential` or a selected profile from `credentials`, the client encrypts it **once** (or per call if `cache:false`) using your account's X25519 public key (ECIES: X25519 + HKDF + AES-256-GCM).
+- When you supply `credential` or a selected profile from `credentials`, the client reuses the encrypted `x-zedgi-cred` blob for 55 minutes by credential content (or encrypts per call if `cache:false`) using your account's X25519 public key (ECIES: X25519 + HKDF + AES-256-GCM).
 - If `credential.header` is present, it is excluded from ECIES encryption and added to the signed RPC body as plaintext metadata for proxy/firewall integrations.
 - The resulting blob is sent as the `x-zedgi-cred` header on every RPC.
 - The server never sees plaintext credentials and never stores them.
 - Request signing (`x-zedgi-ts` / `x-zedgi-nonce` / `x-zedgi-sig`) is **always** applied; the signing secret is auto-pulled + cached when `secret` is not provided.
+
+Keep `cache:true` in production. It is the default and gives the best performance because repeated calls reuse the same encrypted `x-zedgi-cred` for 55 minutes, allowing the gateway decrypt cache to hit. Use `cache:false` only when you deliberately need fresh credential ciphertext on every request, for example while debugging credential encryption or testing rotation behavior; it increases SDK CPU work and makes the gateway repeat full credential decrypt/re-encrypt work.
 
 **Auto public key pull**
 

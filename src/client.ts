@@ -18,7 +18,8 @@ type BootstrapDetails = {
 
 /** In-memory caches (per client options object) so we encrypt/pull at most once. */
 const bootstrapCache = new WeakMap<ZedgiClientOptions, Promise<BootstrapDetails>>();
-const credBlobCache = new WeakMap<ZedgiCredential, Promise<string>>();
+const CRED_BLOB_TTL_MS = 55 * 60 * 1000;
+const credBlobCache = new Map<string, { exp: number; blob: Promise<string> }>();
 
 const signingSecretOf = (o: ZedgiClientOptions): string | undefined => o.signingSecret ?? o.secret;
 
@@ -85,6 +86,14 @@ const resolveSigningSecret = async (options: ZedgiClientOptions): Promise<string
 const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+const stableJson = (value: unknown): string => {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (isPlainRecord(value)) {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+};
+
 export const splitCredentialHeader = (
   credential: Record<string, unknown>
 ): { encryptedCredential: Record<string, unknown>; credentialHeader?: Record<string, unknown> } => {
@@ -117,18 +126,24 @@ const resolveAccountKey = async (options: ZedgiClientOptions): Promise<AccountKe
 /** Build the ECIES-encrypted credential blob, caching it unless cache:false. */
 const resolveCredBlob = async (options: ZedgiClientOptions, credential?: ZedgiCredential): Promise<string | undefined> => {
   if (!credential) return undefined;
-  const build = async (): Promise<string> => {
-    const ak = await resolveAccountKey(options);
-    const { encryptedCredential } = splitCredentialHeader(credential);
-    return encryptCredential(encryptedCredential, ak.publicKey, ak.accountId, ak.keyVersion);
-  };
+  const ak = await resolveAccountKey(options);
+  const { encryptedCredential } = splitCredentialHeader(credential);
+  const build = (): Promise<string> =>
+    encryptCredential(encryptedCredential, ak.publicKey, ak.accountId, ak.keyVersion);
   if (options.cache === false) return build();
-  let cached = credBlobCache.get(credential);
-  if (!cached) {
-    cached = build();
-    credBlobCache.set(credential, cached);
+
+  const key = `${ak.accountId}:${ak.keyVersion}:${ak.publicKey}:${stableJson(encryptedCredential)}`;
+  const now = Date.now();
+  const cached = credBlobCache.get(key);
+  if (cached && cached.exp > now) return cached.blob;
+
+  const blob = build();
+  credBlobCache.set(key, { exp: now + CRED_BLOB_TTL_MS, blob });
+  if (credBlobCache.size > 256) {
+    const oldest = credBlobCache.keys().next().value;
+    if (oldest !== undefined) credBlobCache.delete(oldest);
   }
-  return cached;
+  return blob;
 };
 
 /** True when the SDK is auto-pulling the account key (so it can re-pull on rotation). */
@@ -206,7 +221,7 @@ export const callZedgi = async <T = unknown>(
     if (res.ok === false) {
       if (attempt === 0 && autoKeyMode(options) && isStaleKeyError(res.status, res.error?.code)) {
         bootstrapCache.delete(options);
-        if (credential) credBlobCache.delete(credential);
+        credBlobCache.clear();
         continue;
       }
 
