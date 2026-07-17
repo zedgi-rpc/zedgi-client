@@ -51,4 +51,4 @@ export type {
   TransactionStatement,
 } from './types.js';
 
-export const _ZEDGI_CLIENT_VERSION = '1.0.8';
+export const _ZEDGI_CLIENT_VERSION = '1.0.9';

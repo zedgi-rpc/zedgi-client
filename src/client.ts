@@ -46,7 +46,6 @@ const resolveBootstrap = (options: ZedgiClientOptions): Promise<BootstrapDetails
           key: { id: string; key_version: number; public_key: string; created_at: number };
           signing_secret: string;
           node?: string;
-          node_prefix?: string;
         };
         error?: { message?: string };
       };
@@ -64,7 +63,7 @@ const resolveBootstrap = (options: ZedgiClientOptions): Promise<BootstrapDetails
         keyVersion: parsed.result.key.key_version,
       };
       secretData = parsed.result.signing_secret;
-      node = parsed.result.node ?? parsed.result.node_prefix;
+      node = parsed.result.node;
 
       if (explicitSecret) secretData = explicitSecret;
       if (hasExplicitKey) {
