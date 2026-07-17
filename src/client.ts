@@ -14,7 +14,8 @@ type AccountKey = { publicKey: string; accountId: string; keyVersion: number };
 type BootstrapDetails = {
   accountKey: AccountKey;
   signingSecret: string;
-  nodePrefix?: string;
+  /** Encrypted full node target from bootstrap (required for /rpc). */
+  node?: string;
 };
 
 /** In-memory caches (per client options object) so we encrypt/pull at most once. */
@@ -28,42 +29,42 @@ const resolveBootstrap = (options: ZedgiClientOptions): Promise<BootstrapDetails
   let cached = bootstrapCache.get(options);
   if (!cached) {
     cached = (async () => {
-      let keyData: AccountKey;
-      let secretData: string;
-      let nodePrefix: string | undefined;
+      let keyData: AccountKey | undefined;
+      let secretData: string | undefined;
+      let node: string | undefined;
 
       const explicitSecret = signingSecretOf(options);
       const hasExplicitKey = options.publicKey && options.accountId && options.keyVersion !== undefined;
 
-      if (explicitSecret && hasExplicitKey) {
-        keyData = {
-          publicKey: options.publicKey!,
-          accountId: options.accountId!,
-          keyVersion: options.keyVersion!,
+      // Always hit bootstrap when we need signing secret, account key, or the node blob.
+      // Explicit key/secret alone is not enough — /rpc requires x-zedgi-node from bootstrap.
+      const url = new URL('/api/account/bootstrap', options.url);
+      const res = await fetch(url.toString(), { headers: { 'x-zedgi-key': options.key } });
+      const parsed = (await res.json()) as {
+        ok: boolean;
+        result?: {
+          key: { id: string; key_version: number; public_key: string; created_at: number };
+          signing_secret: string;
+          node?: string;
+          node_prefix?: string;
         };
-        secretData = explicitSecret;
-      } else {
-        const url = new URL('/api/account/bootstrap', options.url);
-        const res = await fetch(url.toString(), { headers: { 'x-zedgi-key': options.key } });
-        const parsed = (await res.json()) as {
-          ok: boolean;
-          result?: {
-            key: { id: string; key_version: number; public_key: string; created_at: number };
-            signing_secret: string;
-            node_prefix?: string;
-          };
-        };
-        if (!res.ok || !parsed.ok || !parsed.result) {
-          throw new Error(`Failed to bootstrap client config (${res.status})`);
-        }
-        keyData = {
-          publicKey: parsed.result.key.public_key,
-          accountId: parsed.result.key.id,
-          keyVersion: parsed.result.key.key_version,
-        };
-        secretData = parsed.result.signing_secret;
-        nodePrefix = parsed.result.node_prefix;
+        error?: { message?: string };
+      };
+      if (!res.ok || !parsed.ok || !parsed.result) {
+        throw new Error(
+          parsed.error?.message
+            ? `Failed to bootstrap client config: ${parsed.error.message}`
+            : `Failed to bootstrap client config (${res.status})`,
+        );
       }
+
+      keyData = {
+        publicKey: parsed.result.key.public_key,
+        accountId: parsed.result.key.id,
+        keyVersion: parsed.result.key.key_version,
+      };
+      secretData = parsed.result.signing_secret;
+      node = parsed.result.node ?? parsed.result.node_prefix;
 
       if (explicitSecret) secretData = explicitSecret;
       if (hasExplicitKey) {
@@ -74,7 +75,11 @@ const resolveBootstrap = (options: ZedgiClientOptions): Promise<BootstrapDetails
         };
       }
 
-      return { accountKey: keyData, signingSecret: secretData, nodePrefix };
+      if (!node) {
+        throw new Error('Bootstrap returned no node — cannot call /rpc without x-zedgi-node');
+      }
+
+      return { accountKey: keyData, signingSecret: secretData, node };
     })();
     bootstrapCache.set(options, cached);
   }
@@ -184,8 +189,11 @@ const sendOnce = async <T>(
   // The signing secret is auto-pulled (and cached) when not supplied in options.
   const details = await resolveBootstrap(options);
   const secret = details.signingSecret;
-  if (details.nodePrefix) {
-    headers['x-zedgi-node'] = details.nodePrefix;
+  if (!options.testNodeUuid) {
+    if (!details.node) {
+      throw new Error('Missing node from bootstrap — cannot call /rpc without x-zedgi-node');
+    }
+    headers['x-zedgi-node'] = details.node;
   }
   const ts = String(Date.now());
   const nonce = randomNonce();
@@ -212,8 +220,8 @@ const sendOnce = async <T>(
   const parsed = await response.json() as RpcResponse<T>;
 
   const respNode = response.headers.get('x-zedgi-node');
-  if (respNode && details.nodePrefix !== respNode) {
-    details.nodePrefix = respNode;
+  if (respNode && details.node !== respNode) {
+    details.node = respNode;
   }
 
   if (parsed.ok) return { ok: true, value: parsed.result };
