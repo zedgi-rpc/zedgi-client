@@ -14,6 +14,7 @@ type AccountKey = { publicKey: string; accountId: string; keyVersion: number };
 type BootstrapDetails = {
   accountKey: AccountKey;
   signingSecret: string;
+  nodePrefix?: string;
 };
 
 /** In-memory caches (per client options object) so we encrypt/pull at most once. */
@@ -29,6 +30,7 @@ const resolveBootstrap = (options: ZedgiClientOptions): Promise<BootstrapDetails
     cached = (async () => {
       let keyData: AccountKey;
       let secretData: string;
+      let nodePrefix: string | undefined;
 
       const explicitSecret = signingSecretOf(options);
       const hasExplicitKey = options.publicKey && options.accountId && options.keyVersion !== undefined;
@@ -48,6 +50,7 @@ const resolveBootstrap = (options: ZedgiClientOptions): Promise<BootstrapDetails
           result?: {
             key: { id: string; key_version: number; public_key: string; created_at: number };
             signing_secret: string;
+            node_prefix?: string;
           };
         };
         if (!res.ok || !parsed.ok || !parsed.result) {
@@ -59,6 +62,7 @@ const resolveBootstrap = (options: ZedgiClientOptions): Promise<BootstrapDetails
           keyVersion: parsed.result.key.key_version,
         };
         secretData = parsed.result.signing_secret;
+        nodePrefix = parsed.result.node_prefix;
       }
 
       if (explicitSecret) secretData = explicitSecret;
@@ -70,7 +74,7 @@ const resolveBootstrap = (options: ZedgiClientOptions): Promise<BootstrapDetails
         };
       }
 
-      return { accountKey: keyData, signingSecret: secretData };
+      return { accountKey: keyData, signingSecret: secretData, nodePrefix };
     })();
     bootstrapCache.set(options, cached);
   }
@@ -178,7 +182,11 @@ const sendOnce = async <T>(
 
   // Request signing (timestamp + nonce + HMAC-SHA256 over "ts:nonce:sha256(body)").
   // The signing secret is auto-pulled (and cached) when not supplied in options.
-  const secret = await resolveSigningSecret(options);
+  const details = await resolveBootstrap(options);
+  const secret = details.signingSecret;
+  if (details.nodePrefix) {
+    headers['x-zedgi-node'] = details.nodePrefix;
+  }
   const ts = String(Date.now());
   const nonce = randomNonce();
   const sig = await hmacSign(`${ts}:${nonce}:${await sha256Hex(body)}`, secret);
@@ -202,6 +210,12 @@ const sendOnce = async <T>(
   }
 
   const parsed = await response.json() as RpcResponse<T>;
+
+  const respNode = response.headers.get('x-zedgi-node');
+  if (respNode && details.nodePrefix !== respNode) {
+    details.nodePrefix = respNode;
+  }
+
   if (parsed.ok) return { ok: true, value: parsed.result };
   return { ok: false, status: response.status, error: parsed.error };
 };
