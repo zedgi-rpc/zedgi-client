@@ -1,6 +1,6 @@
 {
   "name": "@zedgi/zedgi-client",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Zedgi client SDK — call Redis, Postgres, and MySQL from any HTTP runtime.",
   "private": false,
   "license": "MIT",
